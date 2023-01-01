@@ -1,0 +1,125 @@
+version: '3'
+services:
+  webserver:
+    container_name: webserver
+    image: nginx:1.23-alpine
+    restart: always
+    depends_on:
+      - php
+    entrypoint: "/bin/sh -c 'while :; do sleep 18h; nginx -s reload; done & nginx -g \"daemon off;\"'"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./site:/site:ro
+      - ./nginx/etc/letsencrypt:/etc/letsencrypt:ro
+      - ./nginx/var/www:/var/www:ro
+      - ./nginx/etc/nginx/conf:/etc/nginx/conf.d:ro
+      - ./nginx/etc/nginx/rewrite:/etc/nginx/rewrite:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    networks:
+      - default
+      # 可以把-default 改成下列配置，以固定容器IP
+      #default:
+      #  ipv4_address: 10.0.0.10
+
+  certbot:
+    container_name: certbot
+    image: certbot/certbot:v1.31.0
+    restart: always
+    depends_on:
+      - webserver
+    volumes:
+      - ./nginx/etc/letsencrypt:/etc/letsencrypt
+      - ./nginx/var/www/certbot:/var/www
+      - ./site:/site
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    entrypoint: "/bin/sh -c 'while :; do certbot renew; sleep 24h; done'"
+    networks:
+      - default
+
+  php:
+    container_name: php
+    image: php-build:8.1-fpm
+    build:
+      context: ./php
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ./site:/site
+      - ./php/php.ini-production:/usr/local/etc/php/php.ini
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    user: "1000:1000"
+    depends_on:
+      - database
+      - redis
+    networks:
+      - default
+
+  database:
+    container_name: database
+    image: mariadb:10.9.4-jammy
+    restart: always
+    expose:
+      - 3306
+    environment:
+      - MARIADB_USER="root"
+      # openssl rand -base64 48
+      # !!! Change MARIADB_ROOT_PASSWORD before use !!! You can use "openssl rand -base64 48" command to generate random password
+      - MARIADB_ROOT_PASSWORD=FjmgUckDiWtcnSs9z0cn5WpfxPwKi6z6g45phps/4VwZiboqK1Xl43QCCcbHNEXA
+      - TZ="Asia/Shanghai"
+    command:
+      [
+        "--character-set-server=utf8mb4",
+        "--collation-server=utf8mb4_unicode_ci",
+        "--default-time-zone=Asia/Shanghai"
+      ]
+    volumes:
+      - ./mariadb/data:/var/lib/mysql
+      - ./mariadb/conf:/etc/mysql/conf.d
+      - ./mariadb/log:/var/log/mysql
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    networks:
+      - default
+
+  # 数据库工具，为了安全，默认注释掉，如果需要使用请移除注释
+  # adminer:
+  #   container_name: adminer
+  #   image: adminer
+  #   restart: always
+  #   ports:
+  #     - 8080:8080
+
+  redis:
+    container_name: redis
+    image: redis:7.0
+    restart: always
+    environment:
+      # ALLOW_EMPTY_PASSWORD is recommended only for development.
+      - ALLOW_EMPTY_PASSWORD=yes
+      #- REDIS_DISABLE_COMMANDS=FLUSHDB,FLUSHALL
+    volumes:
+      - './redis/data:/data'
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    networks:
+      - default
+
+networks:
+  default:
+    driver: bridge
+    #name: dnmp_network
+    ipam:
+      driver: default
+      # 解除下面的注释可以设置网段，用于nginx等容器固定容器IP
+      #config:
+      #  - subnet: 10.0.0.0/24
+
