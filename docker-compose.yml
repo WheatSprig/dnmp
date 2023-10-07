@@ -1,125 +1,121 @@
-version: '3'
+version: '3.5'
 services:
   webserver:
     container_name: webserver
-    image: nginx:1.23-alpine
+    image: jc21/nginx-proxy-manager:${WEBSERVER_VERSION}
     restart: always
+    ports:
+      - ${WEBSERVER_HTTP_PORT}:80
+      - ${WEBSERVER_HTTPS_PORT}:443
+      - ${WEBSERVER_ADMIN_PORT}:81
     depends_on:
       - php
-    entrypoint: "/bin/sh -c 'while :; do sleep 18h; nginx -s reload; done & nginx -g \"daemon off;\"'"
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+    links:
+      - php
     volumes:
-      - ./site:/site:ro
-      - ./nginx/etc/letsencrypt:/etc/letsencrypt:ro
-      - ./nginx/var/www:/var/www:ro
-      - ./nginx/etc/nginx/conf:/etc/nginx/conf.d:ro
-      - ./nginx/etc/nginx/rewrite:/etc/nginx/rewrite:ro
+      - ${APP_ROOT_PATH}${WEBSITE_PATH}:/site:ro
+      - ${APP_ROOT_PATH}${WEBSERVER_CONF_FILE}:/app/config/production.json
+      - ${APP_ROOT_PATH}${WEBSERVER_DATA_DIR}:/data
+      - ${APP_ROOT_PATH}${WEBSERVER_CERT_DIR}:/etc/letsencrypt
+      - ${APP_ROOT_PATH}${WEBSERVER_REWRITE_DIR}:/rewrite:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     dns:
       - 8.8.8.8
       - 8.8.4.4
+    healthcheck:
+      test: ["CMD", "/bin/check-health"]
+      interval: 10s
+      timeout: 3s
     networks:
-      - default
-      # 可以把-default 改成下列配置，以固定容器IP
-      #default:
+      - external_network
+      # 可以把-external_network 改成下列配置，以固定容器IP
+      #- external_network:
       #  ipv4_address: 10.0.0.10
-
-  certbot:
-    container_name: certbot
-    image: certbot/certbot:v1.31.0
-    restart: always
-    depends_on:
-      - webserver
-    volumes:
-      - ./nginx/etc/letsencrypt:/etc/letsencrypt
-      - ./nginx/var/www/certbot:/var/www
-      - ./site:/site
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
-    entrypoint: "/bin/sh -c 'while :; do certbot renew; sleep 24h; done'"
-    networks:
-      - default
+      - internal_network
 
   php:
     container_name: php
-    image: php-build:8.1-fpm
-    build:
-      context: ./php
-      dockerfile: Dockerfile
+    image: suyar/php:8.2-fpm-alpine
+    #image: php-build:8.1-fpm
+    #build:
+    #  context: ./php
+    #  dockerfile: Dockerfile
     restart: unless-stopped
     volumes:
-      - ./site:/site
-      - ./php/php.ini-production:/usr/local/etc/php/php.ini
+      - ${APP_ROOT_PATH}${WEBSITE_PATH}:/site
+      - ${APP_ROOT_PATH}${PHP_INI_FILE}:/usr/local/etc/php/php.ini:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     user: "1000:1000"
+    ports:
+      - ${DATABASE_PORT}:9000
+    expose:
+      - 9000
     depends_on:
       - database
       - redis
+    links:
+      - database
+      - redis
     networks:
-      - default
+      - internal_network
 
   database:
     container_name: database
-    image: mariadb:10.9.4-jammy
-    restart: always
+    image: ${DATABASE}:${DATABASE_VERSION}
+    restart: unless-stopped
+    ports:
+      - ${DATABASE_PORT}:3306
     expose:
       - 3306
     environment:
-      - MARIADB_USER="root"
-      # openssl rand -base64 48
-      # !!! Change MARIADB_ROOT_PASSWORD before use !!! You can use "openssl rand -base64 48" command to generate random password
-      - MARIADB_ROOT_PASSWORD=FjmgUckDiWtcnSs9z0cn5WpfxPwKi6z6g45phps/4VwZiboqK1Xl43QCCcbHNEXA
-      - TZ="Asia/Shanghai"
+      - "MARIADB_ROOT_PASSWORD=${DATABASE_PASSWORD}"
+      - "MYSQL_ROOT_PASSWORD=${DATABASE_PASSWORD}"
     command:
       [
         "--character-set-server=utf8mb4",
-        "--collation-server=utf8mb4_unicode_ci",
-        "--default-time-zone=Asia/Shanghai"
+        "--collation-server=utf8mb4_unicode_ci"
       ]
     volumes:
-      - ./mariadb/data:/var/lib/mysql
-      - ./mariadb/conf:/etc/mysql/conf.d
+      - "${APP_ROOT_PATH}${DATABASE_DATA_DIR}:/var/lib/mysql"
+      - "${APP_ROOT_PATH}${DATABASE_CONF_DIR}:/etc/mysql/conf.d"
       - ./mariadb/log:/var/log/mysql
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     networks:
-      - default
-
-  # 数据库工具，为了安全，默认注释掉，如果需要使用请移除注释
-  # adminer:
-  #   container_name: adminer
-  #   image: adminer
-  #   restart: always
-  #   ports:
-  #     - 8080:8080
+      - internal_network
 
   redis:
     container_name: redis
-    image: redis:7.0
+    image: redis:${REDIS_VERSION}
     restart: always
+    ports:
+      - ${REDIS_PORT}:6389
+    expose:
+      - 6389
     environment:
       # ALLOW_EMPTY_PASSWORD is recommended only for development.
       - ALLOW_EMPTY_PASSWORD=yes
-      #- REDIS_DISABLE_COMMANDS=FLUSHDB,FLUSHALL
+      - REDIS_DISABLE_COMMANDS=FLUSHDB,FLUSHALL
     volumes:
-      - './redis/data:/data'
+      - ${APP_ROOT_PATH}${REDIS_DATA_DIR}:/data
+      #- ${APP_ROOT_PATH}${REDIS_CONF_FILE}:/usr/local/etc/redis/custom.conf
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     networks:
-      - default
+      - internal_network
 
 networks:
-  default:
+  #当前网桥用于向主机外公开
+  external_network:
+    name: external_network
     driver: bridge
-    #name: dnmp_network
     ipam:
       driver: default
       # 解除下面的注释可以设置网段，用于nginx等容器固定容器IP
       #config:
       #  - subnet: 10.0.0.0/24
-
+  #当前网桥用于将网络限制在本地
+  internal_network:
+    internal: true
